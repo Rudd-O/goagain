@@ -122,22 +122,27 @@ func AwaitSignals(l *net.UnixListener) error {
 // Convert and validate the GOAGAIN_FD environment
 // variable.  If both are present and in order, this is a child process
 // that may pick up where the parent left off.
-func GetEnvs() (*net.UnixListener, error) {
+func GetEnvs() (l *net.UnixListener, err error) {
 	envFd := os.Getenv("GOAGAIN_FD")
 	if "" == envFd {
-		return nil, errors.New("GOAGAIN_FD not set")
+		err = errors.New("GOAGAIN_FD not set")
+		return
 	}
 	var fd uintptr
-	_, err := fmt.Sscan(envFd, &fd)
+	_, err = fmt.Sscan(envFd, &fd)
 	if nil != err {
-		return nil, err
+		return
 	}
-	tmp, err := net.FileListener(os.NewFile(fd, "listener"))
+	var i net.Listener
+	i, err = net.FileListener(os.NewFile(fd, "listener"))
 	if nil != err {
-		return nil, err
+		return
 	}
-	l := tmp.(*net.UnixListener)
-	return l, nil
+	l = i.(*net.UnixListener)
+	if err = syscall.Close(int(fd)); nil != err {
+		return
+	}
+	return
 }
 
 // Re-exec this image without dropping the listener passed to this function.
