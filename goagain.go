@@ -107,7 +107,7 @@ func GetEnvs() (l net.Listener, err error) {
 	if nil != err {
 		return
 	}
-	l = i.(*net.UnixListener)
+	l = i
 	if err = syscall.Close(int(fd)); nil != err {
 		return
 	}
