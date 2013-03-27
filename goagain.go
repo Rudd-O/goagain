@@ -9,13 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"syscall"
 	"reflect"
         "runtime"
         "time"
         "sync"
         "net/http"
         "flag"
+	"syscall"
 )
 
 type ReqCounter struct {
