@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"reflect"
         "runtime"
         "time"
         "sync"
@@ -141,11 +142,6 @@ func GetEnvs() (*net.UnixListener, error) {
 
 // Re-exec this image without dropping the listener passed to this function.
 func Relaunch(l *net.UnixListener) error {
-	f, err := l.File()
-	if nil != err {
-		return err
-	}
-	noCloseOnExec(f.Fd())
 	argv0, err := exec.LookPath(os.Args[0])
 	if nil != err {
 		return err
@@ -154,14 +150,21 @@ func Relaunch(l *net.UnixListener) error {
 	if nil != err {
 		return err
 	}
-	err = os.Setenv("GOAGAIN_FD", fmt.Sprint(f.Fd()))
-	if nil != err {
+	v := reflect.ValueOf(l).Elem().FieldByName("fd").Elem()
+	fd := uintptr(v.FieldByName("sysfd").Int())
+	noCloseOnExec(fd)
+	if err := os.Setenv("GOAGAIN_FD", fmt.Sprint(fd)); nil != err {
 		return err
 	}
 	p, err := os.StartProcess(argv0, os.Args, &os.ProcAttr{
 		Dir:   wd,
 		Env:   os.Environ(),
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr, f},
+		Files: []*os.File{
+			os.Stdin,
+			os.Stdout,
+			os.Stderr,
+			os.NewFile(fd, string(v.FieldByName("sysfile").String())),
+		},
 		Sys:   &syscall.SysProcAttr{},
 	})
 	if nil != err {
