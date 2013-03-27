@@ -13,7 +13,7 @@ This is a derivative program from rcrowley's `https://github.com/rcrowley/goagai
 Installation
 ------------
 
-        go get https://github.com/Rudd-O/goagain
+        go get github.com/Rudd-O/goagain
 
 Usage
 -----
