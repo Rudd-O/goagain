@@ -59,6 +59,10 @@ func (sl *SupervisingListener) Accept() (c net.Conn, err error) {
         return
 }
 
+// Export an error equivalent to net.errClosing for use with Accept during
+// a graceful exit.
+var ErrClosing = errors.New("use of closed network connection")
+
 // Block this goroutine awaiting signals.  With the exception of SIGTERM
 // taking the place of SIGQUIT, signals are handled exactly as in Nginx
 // and Unicorn: <http://unicorn.bogomips.org/SIGNALS.html>.
@@ -72,69 +76,34 @@ func AwaitSignals(l *net.UnixListener) error {
 
 		// TODO SIGHUP should reload configuration.
 
-		// SIGQUIT should exit gracefully.  However, Go doesn't seem
-		// to like handling SIGQUIT (or any signal which dumps core by
-		// default) at all so SIGTERM takes its place.  How graceful
-		// this exit is depends on what the program does after this
-		// function returns control.
-		case syscall.SIGTERM:
-			return nil
-
 		// TODO SIGUSR1 should reopen logs.
 
 		// SIGUSR2 begins the process of restarting without dropping
 		// the listener passed to this function.
 		case syscall.SIGUSR2:
-                       log.Print("got SIGUSR2 relaunch signal.")
 
 			err := Relaunch(l)
 			if nil != err {
 				return err
 			}
-                       log.Print("child launched")
-                       f, err := l.File()
-                       if nil != err {
-                               return err
-                       }
-                       err = fclose(int(f.Fd()))
-                       if nil != err {
-                               return err
-                       }
-                       log.Printf("server no longer accepting requests -- outstanding requests: %d", reqCount.get())
-
-                        for i := 0; (i < 10) && reqCount.get() > 0 ; i++ {
-                                log.Printf("waiting for %d outstanding requests...", reqCount.get())
-                                time.Sleep(1 * time.Second)
-                        }
-
-                        if reqCount.get() == 0 {
-                                log.Print("server gracefully stopped.")
-                                os.Exit(0)
-                        } else {
-                                log.Fatalf("server stopped after 10 seconds with %d clients still connected.", reqCount.get())
-                        }
+			return nil
 
 		}
 	}
 	return nil // It'll never get here.
 }
 
-// Convert and validate the GOAGAIN_FD environment
-// variable.  If both are present and in order, this is a child process
-// that may pick up where the parent left off.
+// Convert and validate the GOAGAIN_FD, GOAGAIN_NAME
+// environment variables.  If both are present and in order, this
+// is a child process that may pick up where the parent left off.
 func GetEnvs() (l *net.UnixListener, err error) {
-	envFd := os.Getenv("GOAGAIN_FD")
-	if "" == envFd {
-		err = errors.New("GOAGAIN_FD not set")
-		return
-	}
 	var fd uintptr
-	_, err = fmt.Sscan(envFd, &fd)
+	_, err = fmt.Sscan(os.Getenv("GOAGAIN_FD"), &fd)
 	if nil != err {
 		return
 	}
 	var i net.Listener
-	i, err = net.FileListener(os.NewFile(fd, "listener"))
+	i, err = net.FileListener(os.NewFile(fd, os.Getenv("GOAGAIN_NAME")))
 	if nil != err {
 		return
 	}
@@ -143,6 +112,16 @@ func GetEnvs() (l *net.UnixListener, err error) {
 		return
 	}
 	return
+}
+
+// Send SIGQUIT (but really SIGTERM since Go can't handle SIGQUIT) to the
+// given ppid in order to complete the handoff to the child process.
+func KillParent(ppid int) error {
+	err := syscall.Kill(ppid, syscall.SIGTERM)
+	if nil != err {
+		return err
+	}
+	return nil
 }
 
 // Re-exec this image without dropping the listener passed to this function.
@@ -161,15 +140,18 @@ func Relaunch(l *net.UnixListener) error {
 	if err := os.Setenv("GOAGAIN_FD", fmt.Sprint(fd)); nil != err {
 		return err
 	}
+	if err := os.Setenv("GOAGAIN_NAME", fmt.Sprintf("tcp:%s->", l.Addr().String())); nil != err {
+		return err
+	}
+	files := make([]*os.File, fd+1)
+	files[syscall.Stdin] = os.Stdin
+	files[syscall.Stdout] = os.Stdout
+	files[syscall.Stderr] = os.Stderr
+	files[fd] = os.NewFile(fd, string(v.FieldByName("sysfile").String()))
 	p, err := os.StartProcess(argv0, os.Args, &os.ProcAttr{
 		Dir:   wd,
 		Env:   os.Environ(),
-		Files: []*os.File{
-			os.Stdin,
-			os.Stdout,
-			os.Stderr,
-			os.NewFile(fd, string(v.FieldByName("sysfile").String())),
-		},
+		Files: files,
 		Sys:   &syscall.SysProcAttr{},
 	})
 	if nil != err {
@@ -245,8 +227,30 @@ func ListenAndServe(proto string, addr string) {
 
         // Block the main goroutine awaiting signals.
         if err := AwaitSignals(l); nil != err {
-                log.Println(err)
-                os.Exit(1)
+                log.Fatalln(err)
+        }
+
+        f, err := l.File()
+        if nil != err {
+             log.Fatalln(err)
+        }
+        err = fclose(int(f.Fd()))
+        if nil != err {
+             log.Fatalln(err)
+        }
+
+        log.Printf("server no longer accepting requests -- outstanding requests: %d", reqCount.get())
+
+        for i := 0; (i < 10) && reqCount.get() > 0 ; i++ {
+             log.Printf("waiting for %d outstanding requests...", reqCount.get())
+             time.Sleep(1 * time.Second)
+        }
+
+        if reqCount.get() == 0 {
+             log.Print("server gracefully stopped.")
+             os.Exit(0)
+        } else {
+             log.Fatalf("server stopped after 10 seconds with %d clients still connected.", reqCount.get())
         }
 }
 
