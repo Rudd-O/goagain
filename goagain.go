@@ -66,7 +66,7 @@ var ErrClosing = errors.New("use of closed network connection")
 // Block this goroutine awaiting signals.  With the exception of SIGTERM
 // taking the place of SIGQUIT, signals are handled exactly as in Nginx
 // and Unicorn: <http://unicorn.bogomips.org/SIGNALS.html>.
-func AwaitSignals(l *net.UnixListener) error {
+func AwaitSignals(l net.Listener) error {
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGUSR2)
 	for {
@@ -96,7 +96,7 @@ func AwaitSignals(l *net.UnixListener) error {
 // Convert and validate the GOAGAIN_FD, GOAGAIN_NAME
 // environment variables.  If both are present and in order, this
 // is a child process that may pick up where the parent left off.
-func GetEnvs() (l *net.UnixListener, err error) {
+func GetEnvs() (l net.Listener, err error) {
 	var fd uintptr
 	_, err = fmt.Sscan(os.Getenv("GOAGAIN_FD"), &fd)
 	if nil != err {
@@ -125,7 +125,7 @@ func KillParent(ppid int) error {
 }
 
 // Re-exec this image without dropping the listener passed to this function.
-func Relaunch(l *net.UnixListener) error {
+func Relaunch(l net.Listener) error {
 	argv0, err := exec.LookPath(os.Args[0])
 	if nil != err {
 		return err
@@ -195,20 +195,35 @@ func fclose(fd int) (err error) {
 }
 
 func ListenAndServe(proto string, addr string) {
+	var(
+		err error
+		l net.Listener
+		lunixaddr *net.UnixAddr
+		ltcpaddr *net.TCPAddr
+	)
         log.SetPrefix(fmt.Sprintf("[%s:%5d] ", os.Args[0], syscall.Getpid()))
-        l, err := GetEnvs()
+        l, err = GetEnvs()
 
         if nil != err {
 
                 log.Printf("opening socket for the first time because %s", err)
                 // Listen on a TCP socket and accept connections in a new goroutine.
-                laddr, err := net.ResolveUnixAddr(proto, addr)
+		if ("unix" == proto) {
+	                lunixaddr, err = net.ResolveUnixAddr(proto, addr)
+		} else {
+	                ltcpaddr, err = net.ResolveTCPAddr(proto, addr)
+		}
                 if nil != err {
                         log.Println(err)
                         os.Exit(1)
                 }
-                log.Printf("listening on %v", laddr)
-                l, err = net.ListenUnix(proto, laddr)
+		if ("unix" == proto) {
+	                log.Printf("listening on %v", lunixaddr)
+			l, err = net.ListenUnix(proto, lunixaddr)
+		} else {
+	                log.Printf("listening on %v", ltcpaddr)
+			l, err = net.ListenTCP(proto, ltcpaddr)
+		}
                 if nil != err {
                         log.Println(err)
                         os.Exit(1)
@@ -230,7 +245,16 @@ func ListenAndServe(proto string, addr string) {
                 log.Fatalln(err)
         }
 
-        f, err := l.File()
+	var f *os.File;
+
+	if ("unix" == proto) {
+		castedl := l.(*net.UnixListener)
+	        f, err = castedl.File()
+	} else {
+		castedl := l.(*net.TCPListener)
+	        f, err = castedl.File()
+	}
+
         if nil != err {
              log.Fatalln(err)
         }
@@ -255,8 +279,10 @@ func ListenAndServe(proto string, addr string) {
 }
 
 func Run() {
+        var protovar string
         var socketvar string
-        flag.StringVar(&socketvar, "socket", "/tmp/socket", "path to UNIX socket to listen on")
+        flag.StringVar(&protovar, "proto", "unix", "protocol to use with socket ('unix' for UNIX sockets, 'tcp' for TCP addresses)")
+        flag.StringVar(&socketvar, "socket", "/tmp/socket", "path to UNIX socket to listen on, or TCP address and port")
         flag.Parse()
-        ListenAndServe("unix", socketvar)
+        ListenAndServe(protovar, socketvar)
 }
