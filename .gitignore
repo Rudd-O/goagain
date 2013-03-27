@@ -2,6 +2,5 @@
 *.a
 *.swp
 _obj
-bin
-pkg
 *~
+cmd/goagain-example/goagain-example
