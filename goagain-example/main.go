@@ -1,7 +1,7 @@
 package main
 
 import (
-	"goagain"
+	"github.com/Rudd-O/goagain"
 	"net/http"
 	"fmt"
 	"time"
